@@ -1,23 +1,23 @@
 // ─────────────────────────────────────────────────────────
-//  GlobalPulse Bot v6.0 — Entry Point
-//  Regions  : kenya, africa, usa, europe, china, japan, korea, world
-//  Topics   : politics, tech, innovation, business, agri,
-//             education, startup, research, finance, invest, jobs
+//  GlobalPulse Bot v6.1 — Entry Point
+//  /start → inline region buttons (no news flood)
+//  Tap a region → get that region's full digest
+//  Tap "Browse by Topic" → topic buttons
 // ─────────────────────────────────────────────────────────
 
 require('dotenv').config();
 const express = require('express');
 const cron    = require('node-cron');
 
-const { fetchAllFeeds }                  = require('./fetcher');
-const { filterArticles }                 = require('./filter');
-const { REGIONS }                        = require('./feeds');
-const { pollCommands }                   = require('./telegram');
+const { fetchAllFeeds }                        = require('./fetcher');
+const { filterArticles }                       = require('./filter');
+const { REGIONS }                              = require('./feeds');
+const { pollCommands, sendRegionMenu,
+        sendTopicMenu, sendText, sendDigest }  = require('./telegram');
 const { verifyWebhook, parseInbound,
-        isEnabled: waEnabled }           = require('./whatsapp');
-const { broadcastDigest, broadcastAlert,
-        sendText }                       = require('./broadcaster');
-const tracker                            = require('./tracker');
+        isEnabled: waEnabled }                 = require('./whatsapp');
+const { broadcastDigest, broadcastAlert }      = require('./broadcaster');
+const tracker                                  = require('./tracker');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -37,36 +37,7 @@ app.post('/webhook', async (req, res) => {
   if (msg) await handleCommand(msg.text, null, msg.from);
 });
 
-// ── Help text ─────────────────────────────────────────────
-const HELP_TEXT =
-`🌐 <b>GlobalPulse Bot v6 — Commands</b>
-
-<b>📍 By Region</b>
-/kenya   — 🇰🇪 Kenya
-/africa  — 🌍 Africa
-/usa     — 🇺🇸 USA
-/europe  — 🇪🇺 Europe
-/china   — 🇨🇳 China
-/japan   — 🇯🇵 Japan
-/korea   — 🇰🇷 South Korea
-/world   — 🌐 All Regions
-
-<b>📂 By Topic</b>
-/politics   — 🏛️ Politics & Governance
-/tech       — 💻 Technology
-/innovation — 🚀 Innovation & R&D
-/business   — 💼 Business & Companies
-/agri       — 🌾 Agriculture & Food
-/edu        — 🎓 Education
-/startup    — 🌱 Startups & Funding
-/research   — 🔬 Research & Science
-/finance    — 💰 Finance & Economy
-/invest     — 📈 Investment & Markets
-/jobs       — 🗂️ Jobs & Careers
-
-/help — Show this menu`;
-
-// ── Region & Topic command maps ───────────────────────────
+// ── Command maps ──────────────────────────────────────────
 const REGION_CMDS = {
   '/kenya':  'kenya',
   '/africa': 'africa',
@@ -100,39 +71,68 @@ async function getArticles() {
   return _cache;
 }
 
+// ── Command handler ───────────────────────────────────────
 async function handleCommand(text, tgChatId = null, waPhone = null) {
-  const cmd = text.toLowerCase().split(/\s+/)[0];
+  const cmd = (text || '').toLowerCase().split(/\s+/)[0];
   console.log(`📩 Command: ${cmd}`);
 
-  if (REGION_CMDS[cmd]) {
-    const region   = REGION_CMDS[cmd];
-    const meta     = REGIONS[region];
-    const filtered = filterArticles(await getArticles(), region);
-    await broadcastDigest(filtered, tgChatId, waPhone, `${meta.emoji} ${meta.label}`);
+  // ── /start, /news, /help → show region picker (no flood) ──
+  if (['/start', '/news', '/help'].includes(cmd)) {
+    if (tgChatId) await sendRegionMenu(tgChatId);
+    // WhatsApp: send a plain text menu since it has no inline buttons
+    if (waPhone) {
+      const waMenu =
+        `🌐 *GlobalPulse* — Reply with a region or topic:\n\n` +
+        `*Regions*\n/kenya /africa /usa /europe /china /japan /korea /world\n\n` +
+        `*Topics*\n/politics /tech /innovation /business /agri /edu /startup /research /finance /invest /jobs`;
+      const wa = require('./whatsapp');
+      await wa.sendText(waMenu, waPhone);
+    }
     return;
   }
 
+  // ── Region command ─────────────────────────────────────
+  if (REGION_CMDS[cmd]) {
+    const region   = REGION_CMDS[cmd];
+    const meta     = REGIONS[region];
+    const label    = `${meta.emoji} ${meta.label}`;
+
+    if (tgChatId) {
+      await sendText(`⏳ Fetching <b>${label}</b> news…`, tgChatId);
+    }
+
+    const filtered = filterArticles(await getArticles(), region);
+    await broadcastDigest(filtered, tgChatId, waPhone, label);
+    return;
+  }
+
+  // ── Topic command ──────────────────────────────────────
   if (TOPIC_CMDS[cmd]) {
-    const cat      = TOPIC_CMDS[cmd];
+    const cat   = TOPIC_CMDS[cmd];
+    const label = cmd.replace('/', '');
+
+    if (tgChatId) {
+      await sendText(`⏳ Fetching <b>${label}</b> news (all regions)…`, tgChatId);
+    }
+
     const filtered = filterArticles(await getArticles());
     await broadcastDigest({ [cat]: filtered[cat] || [] }, tgChatId, waPhone);
     return;
   }
 
-  switch (cmd) {
-    case '/news':
-    case '/start':
-    case '/world': {
-      const filtered = filterArticles(await getArticles());
-      await broadcastDigest(filtered, tgChatId, waPhone, '🌐 Global');
-      break;
-    }
-    default:
-      if (tgChatId) await sendText(HELP_TEXT, tgChatId);
+  // ── /world — all regions ───────────────────────────────
+  if (cmd === '/world') {
+    if (tgChatId) await sendText('⏳ Fetching <b>World</b> news…', tgChatId);
+    const filtered = filterArticles(await getArticles());
+    await broadcastDigest(filtered, tgChatId, waPhone, '🌐 World');
+    return;
   }
+
+  // ── Unknown → show menu ────────────────────────────────
+  if (tgChatId) await sendRegionMenu(tgChatId);
 }
 
-// ── Telegram long-poll loop with backoff ──────────────────
+// ── Telegram long-poll loop ───────────────────────────────
 let tgOffset = 0;
 async function telegramLoop() {
   while (true) {
@@ -145,7 +145,9 @@ async function telegramLoop() {
 }
 telegramLoop().catch(err => console.error('❌ TG loop:', err.message));
 
-// ── 30-min Kenya alerts ───────────────────────────────────
+// ── Scheduled digests (EAT) ───────────────────────────────
+
+// Every 30 min — Kenya real-time alerts
 cron.schedule('*/30 * * * *', async () => {
   const ts = new Date().toLocaleString('en-KE', { timeZone: 'Africa/Nairobi' });
   console.log(`\n⏱  [${ts}] 30-min poll...`);
@@ -164,7 +166,7 @@ cron.schedule('*/30 * * * *', async () => {
   } catch (err) { console.error('❌ Poll failed:', err.message); }
 }, { timezone: 'Africa/Nairobi' });
 
-// ── 7:00 AM EAT — Kenya + Africa digest ──────────────────
+// 7:00 AM — Kenya digest
 cron.schedule('0 4 * * *', async () => {
   console.log('\n📰 Daily Kenya digest...');
   try {
@@ -175,7 +177,7 @@ cron.schedule('0 4 * * *', async () => {
   } catch (err) { console.error('❌ Kenya digest failed:', err.message); }
 }, { timezone: 'Africa/Nairobi' });
 
-// ── 7:30 AM EAT — Africa digest ──────────────────────────
+// 7:30 AM — Africa digest
 cron.schedule('30 4 * * *', async () => {
   console.log('\n📰 Daily Africa digest...');
   try {
@@ -184,45 +186,36 @@ cron.schedule('30 4 * * *', async () => {
   } catch (err) { console.error('❌ Africa digest failed:', err.message); }
 }, { timezone: 'Africa/Nairobi' });
 
-// ── 8:00 AM EAT — Global Tech, Innovation & Business ─────
+// 8:00 AM — Global Tech, Innovation & Business
 cron.schedule('0 5 * * *', async () => {
   console.log('\n🌐 Daily global digest...');
   try {
     const filtered = filterArticles(await getArticles());
     await broadcastDigest(
-      {
-        technology:  filtered.technology,
-        innovation:  filtered.innovation,
-        business:    filtered.business,
-        startup:     filtered.startup,
-        research:    filtered.research,
-      },
+      { technology: filtered.technology, innovation: filtered.innovation,
+        business: filtered.business, startup: filtered.startup, research: filtered.research },
       null, null, '🌐 Global Tech & Business'
     );
   } catch (err) { console.error('❌ Global digest failed:', err.message); }
 }, { timezone: 'Africa/Nairobi' });
 
-// ── 9:00 AM EAT — Weekly deep reports (Mon only) ─────────
+// 9:00 AM Mondays — Weekly Reports
 cron.schedule('0 6 * * 1', async () => {
   console.log('\n📊 Weekly reports digest (Monday)...');
   try {
     const filtered = filterArticles(await getArticles());
     await broadcastDigest(
-      {
-        research:    filtered.research,
-        business:    filtered.business,
-        agriculture: filtered.agriculture,
-        education:   filtered.education,
-      },
+      { research: filtered.research, business: filtered.business,
+        agriculture: filtered.agriculture, education: filtered.education },
       null, null, '📊 Weekly Reports & Research'
     );
   } catch (err) { console.error('❌ Weekly reports failed:', err.message); }
 }, { timezone: 'Africa/Nairobi' });
 
 app.listen(PORT, () => {
-  console.log(`\n🌐 GlobalPulse Bot v6.0 on port ${PORT}`);
-  console.log(`📱 Telegram: enabled | 💬 WhatsApp: ${waEnabled() ? 'enabled' : 'disabled'}`);
-  console.log(`🗺  8 regions | 11 topics | Alerts every 30min | Digests 7AM/7:30AM/8AM/9AM(Mon) EAT\n`);
+  console.log(`\n🌐 GlobalPulse Bot v6.1 on port ${PORT}`);
+  console.log(`📱 Telegram: inline buttons | 💬 WhatsApp: ${waEnabled() ? 'enabled' : 'disabled'}`);
+  console.log(`🗺  8 regions | 11 topics | /start → region picker\n`);
 });
 
 if (process.env.RUN_ON_START === 'true') {

@@ -35,13 +35,25 @@ const TENDER_TITLE = ['tender','RFP','RFQ','request for proposal','request for q
   'expression of interest','EOI','invitation to bid','ITB','procurement notice',
   'prequalification','pre-qualification'];
 
+// Keywords 4 chars or shorter are prone to false substring matches
+// (e.g. "AI" inside "Nairobi", "EV" inside "seven", "ICT" inside "strict")
+// — these require a real word boundary; longer phrases are safe with .includes()
+function keywordMatchesText(lowerText, keyword) {
+  const kw = keyword.toLowerCase();
+  if (kw.length <= 4) {
+    const re = new RegExp(`\\b${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+    return re.test(lowerText);
+  }
+  return lowerText.includes(kw);
+}
+
 function countMatches(text, keywords) {
   const lower = text.toLowerCase();
-  return keywords.filter(kw => lower.includes(kw.toLowerCase())).length;
+  return keywords.filter(kw => keywordMatchesText(lower, kw)).length;
 }
 function titleMatches(title, keywords) {
   const lower = title.toLowerCase();
-  return keywords.some(kw => lower.includes(kw.toLowerCase()));
+  return keywords.some(kw => keywordMatchesText(lower, kw));
 }
 
 function categorise(article) {

@@ -56,8 +56,23 @@ function linkHref(linkVal) {
   return linkVal['@_href'] || text(linkVal) || '';
 }
 
+// Named HTML entities commonly found in RSS feeds
+const HTML_ENTITIES = {
+  '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&apos;': "'",
+  '&nbsp;': ' ', '&mdash;': '—', '&ndash;': '–', '&hellip;': '…',
+  '&rsquo;': '\u2019', '&lsquo;': '\u2018', '&rdquo;': '\u201d', '&ldquo;': '\u201c',
+};
+
+/** Decode HTML entities: named (&amp;), decimal (&#8217;), and hex (&#x2019;) */
+function decodeEntities(str = '') {
+  return str
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&[a-z]+;/gi, (entity) => HTML_ENTITIES[entity.toLowerCase()] ?? entity);
+}
+
 function stripHtml(str = '') {
-  return str.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;/g, ' ').replace(/\s+/g, ' ').trim();
+  return decodeEntities(str.replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 }
 
 function extractSummary(item) {
